@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>Visualizador Grafo BiparTunes Pro</title>
+  <script src="https://unpkg.com/vis-network@9.1.2/dist/vis-network.min.js"></script>
+  <link href="https://unpkg.com/vis-network@9.1.2/dist/vis-network.min.css" rel="stylesheet"/>
+  <style>
+    body { margin:0; font-family:'Segoe UI',Arial,sans-serif; background:#181818; color:#fff;}
+    #container { display:flex; height:100vh; }
+    #sidepanel {
+      width:320px; background:#181818; color:#fff; border-right:1px solid #282828;
+      padding:22px 22px 10px 22px; box-sizing:border-box; display:flex; flex-direction:column;
+    }
+    #sidepanel h2 { color:#1DB954; font-weight:bold; margin-bottom:12px; }
+    #fileinput, #reloadbtn, #exportimg, #showall {
+      background:#222; color:#1DB954; border:none; padding:9px 16px; margin:10px 0;
+      border-radius:8px; cursor:pointer; font-weight:bold;
+    }
+    #fileinput:hover, #reloadbtn:hover, #exportimg:hover, #showall:hover { background:#282828; }
+    #filters { margin-bottom:10px;}
+    #searchBox {
+      width:97%; margin:10px auto 0 auto; padding:8px 10px; border-radius:8px; font-size:16px;
+      background:#232323; color:#1DB954; border:1px solid #282828;
+    }
+    #selectNode {width:97%; margin:10px auto 0 auto; padding:8px 4px; border-radius:7px; font-size:16px;}
+    #details { margin-top:18px; font-size:15px;color:#b3b3b3;}
+    #network {flex:1;background:#232323; position:relative;}
+    .vis-network { background:#232323 !important;}
+    #footer { font-size:13px; color:#606060; margin-top:auto;}
+    #exportimg {margin-top:12px;}
+    #showall {margin-top:4px;}
+    #focusOverlay {
+      position:absolute; left:320px; top:0;
+      width:calc(100vw - 320px); height:100vh;
+      background:rgba(0,0,0,0.44); pointer-events:none; z-index:2;
+      display:none; transition:all 0.4s;
+    }
+    @media(max-width:700px){
+      #container {flex-direction:column;}
+      #sidepanel{width:100vw;}
+      #network{height:70vh;}
+      #focusOverlay {width:100vw; left:0;}
+    }
+  </style>
+</head>
+<body>
+<div id="container">
+  <div id="sidepanel">
+    <h2>Grafo BiparTunes Pro</h2>
+    <input type="file" id="fileinput" accept=".json">
+    <div id="filters">
+      <input type="text" id="searchBox" placeholder="Buscar usuario o canción...">
+      <select id="selectNode"><option value="">-- Selecciona usuario/canción --</option></select>
+      <button id="showall" onclick="showAll()">Mostrar TODO el grafo</button>
+    </div>
+    <button id="reloadbtn" onclick="location.reload()">Recargar visualizador</button>
+    <button id="exportimg">Exportar imagen (PNG)</button>
+    <div id="details">
+      <b>Selecciona un nodo</b> para ver sus datos aquí.
+    </div>
+    <div id="footer">
+      <hr style="border:1px solid #242424; margin:12px 0;">
+      Zoom, mueve nodos, haz clic para detalles.<br>
+      <span style="color:#1DB954;">Usuarios: Verde</span><br>
+      <span style="color:#ffffff;">Canciones: Blanco</span>
+    </div>
+  </div>
+  <div id="network"><div id="focusOverlay"></div></div>
+</div>
+<script>
+// ======= Paleta y formato =========
+const colors = {
+  usuario: { color: {background:"#1DB954", border:"#1ed760"}, shape:"ellipse", font:{color:"white", size:18, face:"Segoe UI"}, icon: "👤" },
+  cancion: { color: {background:"#fff", border:"#1DB954"}, shape:"box", font:{color:"#181818", size:16, face:"Segoe UI"}, icon: "🎵" }
+};
+// ======= Grafo de ejemplo =========
+let originalGraph = {
+  nodes: [
+    {id:"U1", label:"Pedro", group:"usuario"},
+    {id:"U2", label:"Juan", group:"usuario"},
+    {id:"C1", label:"High and low", group:"cancion"},
+    {id:"C2", label:"The fate of ophelia", group:"cancion"},
+    {id:"C3", label:"Firework", group:"cancion"}
+  ],
+  edges: [
+    {from:"U1", to:"C1", label:"5"},
+    {from:"U2", to:"C2", label:"3"},
+    {from:"U1", to:"C2", label:"2"},
+    {from:"U2", to:"C3", label:"4"}
+  ]
+};
+
+// ======= Variables y helpers =========
+let network, lastGraph = originalGraph, filteredGraph = null, allNodes = [];
+let allSelectOptions = [];
+const overlay = document.getElementById('focusOverlay');
+
+// ======= Renderizado básico =========
+function drawGraph(graph) {
+  graph = JSON.parse(JSON.stringify(graph)); // safe copy
+  let nodes = new vis.DataSet(graph.nodes.map(n => {
+    let icon = colors[n.group]?.icon || "";
+    return Object.assign({}, n, colors[n.group] || {}, {label: icon+" "+n.label});
+  }));
+  let edges = new vis.DataSet(graph.edges);
+  let data = {nodes, edges};
+  let options = {
+    layout: {improvedLayout:true},
+    physics: {barnesHut: {gravitationalConstant:-4000,springLength:100}},
+    nodes: {borderWidth:2,shadow:true,shapeProperties:{borderDashes:false}},
+    edges: {color:"#666",font:{color:"#aaa",size:14,face:"Segoe UI"},arrows:'to',smooth:true},
+    interaction: {hover:true,tooltipDelay:60},
+    groups: {usuario:colors.usuario,cancion:colors.cancion}
+  };
+  network = new vis.Network(document.getElementById('network'), data, options);
+
+  network.on("selectNode",function(params){
+    let node = graph.nodes.find(n=>n.id===params.nodes[0]);
+    if(node){
+      let type = (node.group==="usuario") ? "Usuario" : "Canción";
+      let connected = params.nodes[0];
+      let edges = graph.edges.filter(e=>e.from===connected||e.to===connected);
+      let dataList = edges.map(e=>
+        (e.from===connected)
+        ? "→ "+(graph.nodes.find(n=>n.id===e.to)?.label)+" ["+e.label+"]"
+        : "← "+(graph.nodes.find(n=>n.id===e.from)?.label)+" ["+e.label+"]"
+      ).join("<br>");
+      document.getElementById('details').innerHTML =
+        `<b>${type}:</b> ${node.label}<br><br><b>Conexiones:</b><br>${dataList}`;
+    }
+  });
+  network.on("deselectNode",function(){
+    document.getElementById('details').innerHTML = '<b>Selecciona un nodo</b> para ver sus datos aquí.';
+  });
+}
+
+// ======= Filtrado por usuario/canción/social =========
+function filterGraphByNode(nodeId){
+  let node = (lastGraph.nodes.find(n=>n.id===nodeId));
+  if(!node) return;
+
+  let edges = lastGraph.edges.filter(e=>e.from===nodeId||e.to===nodeId);
+  let involvedIds = [nodeId];
+  edges.forEach(e=>{
+    if(e.from===nodeId) involvedIds.push(e.to);
+    else involvedIds.push(e.from);
+  });
+
+  // Vista social ampliada y spotlight
+  if(node.group === "usuario") {
+    let sharedSongs = edges.filter(e => e.from === nodeId).map(e => e.to);
+    let moreUsers = lastGraph.edges.filter(e =>
+      sharedSongs.includes(e.to) && e.from !== nodeId
+    ).map(e => e.from);
+    involvedIds = [...new Set([...involvedIds, ...moreUsers])];
+  }
+  if(node.group === "cancion") {
+    let users = lastGraph.edges.filter(e => e.to === nodeId).map(e => e.from);
+    involvedIds = [...new Set([...involvedIds, ...users])];
+  }
+  let nodes=lastGraph.nodes.filter(n=>involvedIds.includes(n.id));
+  let subedges=lastGraph.edges.filter(e=>involvedIds.includes(e.from)&&involvedIds.includes(e.to));
+
+  drawGraph({ nodes, edges: subedges });
+  if(overlay){
+    overlay.style.display="block";
+    setTimeout(()=>{ overlay.style.display="none"; }, 1300);
+  }
+  
+  let tipo = node.group === "usuario" ? "Usuario" : "Canción";
+  document.getElementById('details').innerHTML =
+    `<b>Vista filtrada:</b> Mostrando <span style="color:#1DB954;">${tipo}:</span> [${node.label}] y sus conexiones.<br>
+     <b>Total conexiones:</b> ${subedges.length}`;
+}
+function showAll(){
+  document.getElementById('details').innerHTML='<b>Selecciona un nodo</b> para ver sus datos aquí.';
+  filteredGraph=null;
+  drawGraph(lastGraph);
+}
+
+// ======= Panel desplegable y búsqueda =========
+function reloadSelector(){
+  let sel = document.getElementById('selectNode');
+  let searchBox = document.getElementById('searchBox');
+  sel.innerHTML = '<option value="">-- Selecciona usuario/canción --</option>';
+  allSelectOptions = [];
+  allNodes = lastGraph.nodes;
+  allNodes.forEach(n=>{
+    let text = `${colors[n.group]?.icon || ""} ${n.label}`;
+    sel.innerHTML += `<option value="${n.id}">${text}</option>`;
+    allSelectOptions.push({id:n.id, label:text});
+  });
+  sel.onchange = function(){
+    if(sel.value) filterGraphByNode(sel.value);
+  };
+  // Búsqueda con filtrado instantáneo
+  searchBox.oninput = function(){
+    let txt = searchBox.value.trim().toLowerCase();
+    let filtered = allSelectOptions.filter(opt=>
+      opt.label.toLowerCase().indexOf(txt) >= 0
+    );
+    sel.innerHTML = '<option value="">-- Selecciona usuario/canción --</option>';
+    filtered.forEach(opt=>{
+      sel.innerHTML += `<option value="${opt.id}">${opt.label}</option>`;
+    });
+    // Si solo hay 1 opción, selecciona y filtra el grafo instantáneamente
+    if(filtered.length === 1){
+      filterGraphByNode(filtered[0].id);
+      sel.value = filtered[0].id;
+    }
+    // Si no tienes nada escrito, muestra todo.
+    if(txt.length === 0){
+      showAll();
+    }
+  };
+}
+
+// ======= Carga inicial =======
+drawGraph(originalGraph);
+reloadSelector();
+
+// ======= Carga JSON externo =======
+document.getElementById('fileinput').addEventListener('change',function(e){
+  let file=e.target.files[0];
+  let reader=new FileReader();
+  reader.onload=function(event){
+    try{
+      let graph=JSON.parse(event.target.result);
+      lastGraph=graph;
+      showAll();
+      reloadSelector();
+    }catch(err){alert("Archivo JSON inválido");}
+  };
+  reader.readAsText(file);
+});
+
+// ======= Exportar imagen (PNG) del grafo =========
+document.getElementById('exportimg').onclick=function(){
+  let canvas=document.querySelector("#network canvas");
+  if(canvas){
+    let link=document.createElement('a');
+    link.href=canvas.toDataURL("image/png");
+    link.download="grafo-bipartunes.png";
+    link.click();
+  }else{alert("No se pudo exportar la imagen.");}
+};
+</script>
+</body>
+</html>

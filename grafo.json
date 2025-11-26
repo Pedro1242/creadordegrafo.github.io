@@ -1,0 +1,15 @@
+{
+  "nodes": [
+    { "id": "U1", "label": "Pedro", "group": "usuario" },
+    { "id": "U2", "label": "Juan", "group": "usuario" },
+    { "id": "C1", "label": "High and low", "group": "cancion" },
+    { "id": "C2", "label": "The fate of ophelia", "group": "cancion" },
+    { "id": "C3", "label": "Firework", "group": "cancion" }
+  ],
+  "edges": [
+    { "from": "U1", "to": "C1", "label": "5" },
+    { "from": "U2", "to": "C2", "label": "3" },
+    { "from": "U1", "to": "C2", "label": "2" },
+    { "from": "U2", "to": "C3", "label": "4" }
+  ]
+}
