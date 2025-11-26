@@ -13,11 +13,11 @@
       padding:22px 22px 10px 22px; box-sizing:border-box; display:flex; flex-direction:column;
     }
     #sidepanel h2 { color:#1DB954; font-weight:bold; margin-bottom:12px; }
-    #fileinput, #reloadbtn, #exportimg, #showall {
+    #fileinput, #reloadbtn, #exportimg, #showall, #loadlatestbtn {
       background:#222; color:#1DB954; border:none; padding:9px 16px; margin:10px 0;
       border-radius:8px; cursor:pointer; font-weight:bold;
     }
-    #fileinput:hover, #reloadbtn:hover, #exportimg:hover, #showall:hover { background:#282828; }
+    #fileinput:hover, #reloadbtn:hover, #exportimg:hover, #showall:hover, #loadlatestbtn:hover { background:#282828; }
     #filters { margin-bottom:10px;}
     #searchBox {
       width:97%; margin:10px auto 0 auto; padding:8px 10px; border-radius:8px; font-size:16px;
@@ -36,6 +36,7 @@
       background:rgba(0,0,0,0.44); pointer-events:none; z-index:2;
       display:none; transition:all 0.4s;
     }
+    #loadlatestbtn {margin-top:10px;}
     @media(max-width:700px){
       #container {flex-direction:column;}
       #sidepanel{width:100vw;}
@@ -48,6 +49,7 @@
 <div id="container">
   <div id="sidepanel">
     <h2>Grafo BiparTunes Pro</h2>
+    <button id="loadlatestbtn">Leer el archivo más reciente</button>
     <input type="file" id="fileinput" accept=".json">
     <div id="filters">
       <input type="text" id="searchBox" placeholder="Buscar usuario o canción...">
@@ -69,41 +71,57 @@
   <div id="network"><div id="focusOverlay"></div></div>
 </div>
 <script>
-// ======= Paleta y formato =========
 const colors = {
   usuario: { color: {background:"#1DB954", border:"#1ed760"}, shape:"ellipse", font:{color:"white", size:18, face:"Segoe UI"}, icon: "👤" },
   cancion: { color: {background:"#fff", border:"#1DB954"}, shape:"box", font:{color:"#181818", size:16, face:"Segoe UI"}, icon: "🎵" }
 };
-// ======= Grafo de ejemplo =========
-let originalGraph = {
-  nodes: [
-    {id:"U1", label:"Pedro", group:"usuario"},
-    {id:"U2", label:"Juan", group:"usuario"},
-    {id:"C1", label:"High and low", group:"cancion"},
-    {id:"C2", label:"The fate of ophelia", group:"cancion"},
-    {id:"C3", label:"Firework", group:"cancion"}
-  ],
-  edges: [
-    {from:"U1", to:"C1", label:"5"},
-    {from:"U2", to:"C2", label:"3"},
-    {from:"U1", to:"C2", label:"2"},
-    {from:"U2", to:"C3", label:"4"}
-  ]
-};
 
-// ======= Variables y helpers =========
-let network, lastGraph = originalGraph, filteredGraph = null, allNodes = [];
+let network, lastGraph, filteredGraph = null, allNodes = [];
 let allSelectOptions = [];
 const overlay = document.getElementById('focusOverlay');
 
-// ======= Renderizado básico =========
-function drawGraph(graph) {
-  graph = JSON.parse(JSON.stringify(graph)); // safe copy
-  let nodes = new vis.DataSet(graph.nodes.map(n => {
-    let icon = colors[n.group]?.icon || "";
-    return Object.assign({}, n, colors[n.group] || {}, {label: icon+" "+n.label});
+function getUniqueGraph(graph) {
+  // Mapear IDs+grupo a prefijos únicos
+  const idGroupMap = {};
+  graph.nodes.forEach(n => {
+    idGroupMap[`usuario_${n.id}`] = (n.group === "usuario");
+    idGroupMap[`cancion_${n.id}`] = (n.group === "cancion");
+  });
+
+  // Prefija el group PARA TODOS
+  let nodes = graph.nodes.map(n => ({
+    ...n,
+    _realId: n.id,
+    id: n.group[0].toUpperCase() + n.id
   }));
-  let edges = new vis.DataSet(graph.edges);
+
+  let edges = graph.edges.map(e => {
+    // Forzamos prefijo correcto según si existe nodo-usuario o nodo-cancion
+    let fromType = idGroupMap[`usuario_${e.from}`] ? "U" : (idGroupMap[`cancion_${e.from}`] ? "C" : "");
+    let toType   = idGroupMap[`usuario_${e.to}`]   ? "U" : (idGroupMap[`cancion_${e.to}`]   ? "C" : "");
+    return {
+      ...e,
+      from: fromType + e.from,
+      to: toType + e.to
+    }
+  });
+
+  return { nodes, edges };
+}
+
+
+
+// Renderizado básico
+function drawGraph(graph) {
+  // Convierte a IDs únicos por tipo solo para vis-network, no afecta JSON original
+  let fixed = getUniqueGraph(graph);
+  let nodes = new vis.DataSet(fixed.nodes.map(n => {
+    let icon = (n.group === "usuario") ? "👤" : "🎵";
+    let colorSetup = (n.group === "usuario") ? colors.usuario : colors.cancion;
+    return Object.assign({}, n, colorSetup, {label: icon+" "+n.label});
+  }));
+  let edges = new vis.DataSet(fixed.edges);
+
   let data = {nodes, edges};
   let options = {
     layout: {improvedLayout:true},
@@ -116,15 +134,16 @@ function drawGraph(graph) {
   network = new vis.Network(document.getElementById('network'), data, options);
 
   network.on("selectNode",function(params){
-    let node = graph.nodes.find(n=>n.id===params.nodes[0]);
+    let node = fixed.nodes.find(n=>n.id===params.nodes[0]);
     if(node){
       let type = (node.group==="usuario") ? "Usuario" : "Canción";
       let connected = params.nodes[0];
-      let edges = graph.edges.filter(e=>e.from===connected||e.to===connected);
+      let thisId = connected;
+      let edges = fixed.edges.filter(e=>e.from===thisId||e.to===thisId);
       let dataList = edges.map(e=>
-        (e.from===connected)
-        ? "→ "+(graph.nodes.find(n=>n.id===e.to)?.label)+" ["+e.label+"]"
-        : "← "+(graph.nodes.find(n=>n.id===e.from)?.label)+" ["+e.label+"]"
+        (e.from===thisId)
+        ? "→ "+(fixed.nodes.find(n=>n.id===e.to)?.label)+" ["+e.label+"]"
+        : "← "+(fixed.nodes.find(n=>n.id===e.from)?.label)+" ["+e.label+"]"
       ).join("<br>");
       document.getElementById('details').innerHTML =
         `<b>${type}:</b> ${node.label}<br><br><b>Conexiones:</b><br>${dataList}`;
@@ -135,7 +154,8 @@ function drawGraph(graph) {
   });
 }
 
-// ======= Filtrado por usuario/canción/social =========
+
+// Filtrado por usuario/canción/social
 function filterGraphByNode(nodeId){
   let node = (lastGraph.nodes.find(n=>n.id===nodeId));
   if(!node) return;
@@ -147,7 +167,6 @@ function filterGraphByNode(nodeId){
     else involvedIds.push(e.from);
   });
 
-  // Vista social ampliada y spotlight
   if(node.group === "usuario") {
     let sharedSongs = edges.filter(e => e.from === nodeId).map(e => e.to);
     let moreUsers = lastGraph.edges.filter(e =>
@@ -179,7 +198,7 @@ function showAll(){
   drawGraph(lastGraph);
 }
 
-// ======= Panel desplegable y búsqueda =========
+// Panel desplegable y búsqueda
 function reloadSelector(){
   let sel = document.getElementById('selectNode');
   let searchBox = document.getElementById('searchBox');
@@ -187,14 +206,14 @@ function reloadSelector(){
   allSelectOptions = [];
   allNodes = lastGraph.nodes;
   allNodes.forEach(n=>{
-    let text = `${colors[n.group]?.icon || ""} ${n.label}`;
+    let icon = (n.group === "usuario") ? "👤" : "🎵";
+    let text = `${icon} ${n.label}`;
     sel.innerHTML += `<option value="${n.id}">${text}</option>`;
     allSelectOptions.push({id:n.id, label:text});
   });
   sel.onchange = function(){
     if(sel.value) filterGraphByNode(sel.value);
   };
-  // Búsqueda con filtrado instantáneo
   searchBox.oninput = function(){
     let txt = searchBox.value.trim().toLowerCase();
     let filtered = allSelectOptions.filter(opt=>
@@ -204,23 +223,56 @@ function reloadSelector(){
     filtered.forEach(opt=>{
       sel.innerHTML += `<option value="${opt.id}">${opt.label}</option>`;
     });
-    // Si solo hay 1 opción, selecciona y filtra el grafo instantáneamente
     if(filtered.length === 1){
       filterGraphByNode(filtered[0].id);
       sel.value = filtered[0].id;
     }
-    // Si no tienes nada escrito, muestra todo.
     if(txt.length === 0){
       showAll();
     }
   };
 }
 
-// ======= Carga inicial =======
-drawGraph(originalGraph);
-reloadSelector();
+fetch(url)
+  .then(response => response.text())
+  .then(txt => {
+    console.log("Contenido crudo JSON:", txt); // Útil para depurar
+    let data = JSON.parse(txt);
+    lastGraph = data;
+    showAll();
+    reloadSelector();
+  })
+  .catch(err => {
+    alert("No se pudo cargar el grafo más reciente: " + err);
+  });
 
-// ======= Carga JSON externo =======
+
+// ==== FUNCIÓN PARA CARGAR JSON DEL REPO AUTOMÁTICAMENTE Y BOTÓN ====
+function loadLatestJSON() {
+  const url = "grafo.json"; // si pruebas en local y está en la misma carpeta que tu HTML
+  fetch(url)
+    .then(response => {
+      if(!response.ok) throw new Error('No se pudo cargar el archivo: ' + response.statusText);
+      return response.json();
+    })
+    .then(data => {
+      console.log("DATA JSON:", data);
+      lastGraph = data;
+      showAll();
+      reloadSelector();
+    })
+    .catch(err => {
+      alert("No se pudo cargar el grafo más reciente: " + err);
+    });
+}
+
+document.getElementById("loadlatestbtn").onclick = loadLatestJSON;
+window.onload = loadLatestJSON;
+
+document.getElementById("loadlatestbtn").onclick = loadLatestJSON;
+window.onload = loadLatestJSON;
+
+// Carga JSON externo manual (drag & drop)
 document.getElementById('fileinput').addEventListener('change',function(e){
   let file=e.target.files[0];
   let reader=new FileReader();
@@ -235,7 +287,7 @@ document.getElementById('fileinput').addEventListener('change',function(e){
   reader.readAsText(file);
 });
 
-// ======= Exportar imagen (PNG) del grafo =========
+// Exportar imagen (PNG) del grafo
 document.getElementById('exportimg').onclick=function(){
   let canvas=document.querySelector("#network canvas");
   if(canvas){
